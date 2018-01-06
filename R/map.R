@@ -1,134 +1,61 @@
-
 library(RODBC)
-library(ggplot2)
-library(ggvis)
-library(rgeos)
-library(magrittr)
+library(pocr)
+library(shiny)
 library(RColorBrewer)
+library(ggvis)
+library(ggplot2)
 library(dplyr)
 
-# Getting shape data
+# Get map
+washington <- map_data("county") %>%
+  filter(region == "washington") %>%
+  rename(county = subregion)
 
-county_dat <- map_data('county')
-wa_counties <- filter(county_dat, region == 'washington')
-
-wa_counties %<>% mutate(county = Hmisc::capitalize(subregion))
-
-# Getting pop data
-
+# Get pop dat
 con <- odbcConnect('poc')
 
 pop_dat <- sqlQuery(con, 
-              'SELECT measurement_year
-                  , county_desc AS county
-                  , pop_cnt
-               FROM dbo.ref_lookup_ofm_total_population AS p
-               LEFT JOIN dbo.ref_lookup_county AS c
-               ON p.fips = c.countyfips
-               WHERE pk_gndr = 0
-                  AND cd_race = 0
-                  AND measurement_year = 2016
-                  AND fips != 53'
-              )
+                    'SELECT measurement_year
+                    , county_desc AS county
+                    , pop_cnt
+                    , countyfips
+                    FROM dbo.ref_lookup_ofm_population AS p
+                    LEFT JOIN dbo.ref_lookup_county AS c
+                    ON p.fips = c.countyfips
+                    WHERE pk_gndr = 0
+                    AND age_grouping_cd = 0
+                    AND cd_race = 0
+                    AND measurement_year = 2016
+                    AND fips != 53'
+) %>%
+  mutate(county = tolower(county))
 
-# joining data together
+# Join data together
+county_dat <- left_join(washington, pop_dat) %>%
+  left_join(select(ref_lookup_county, county_desc, countyfips)) %>%
+  select(-county) %>%
+  rename(county = county_desc)
 
-county_dat <- left_join(wa_counties, pop_dat)
-
-# getting colors
-
-ramp <- colorRampPalette(c("white", brewer.pal(n=9, name="YlOrRd")), space="Lab")
-
-# map_d$fill_col <- 
+# Tooltip function
+county_name <- function(x) {
   
+  county_filter <- filter(county_dat, county == x$county) %>%
+    distinct(county, pop_cnt) 
   
-  as.character(cut(county_dat$pop_cnt, seq(0,1000000,100000), include.lowest=TRUE, labels=ramp(100000)))
+  paste0("<div style = 'font-family:Open Sans'>", 
+         format(county_filter$county), "<br />", 
+         "Count: ", format(round(county_filter$pop_cnt), big.mark = ","))
+}
 
-
-map_d$fill_col <- ifelse(is.na(map_d$fill_col), "#FFFFFF", map_d$fill_col)
-
-# Centering county labels
-# 
-# county_centers <- wa_counties %>%
-#   gCentroid(byid = TRUE, id = 'group') %>%
-#   data.frame %>%
-#   cbind(name=maine$name %>% gsub(" County, ME", "", .) )
-
-# Getting tooltip data
-
-get_state_dat <- function(x){
-  state_dat <- filter(wa_counties, subregion == x$subregion) %>%
-    select(subregion) %>%
-    distinct() %>%
-    mutate(subregion = Hmisc::capitalize(subregion))
-  paste(state_dat, "<br />")
-} 
-
-get_state_dat(wa_counties)
-
-# creating  map
-
+# Interactive map
 county_dat %>%
+  group_by(group, county) %>%
   ggvis(~long, ~lat) %>%
-  group_by(group, subregion) %>%
-  layer_paths(fill = ~pop_cnt
-              , strokeOpacity := 0.5
-              , strokeWidth := 0.25
-              , stroke:="#7f7f7f"
-              ) %>%
+  layer_paths(fill = ~pop_cnt,
+              strokeWidth:=0.5, stroke:="white") %>%
+  scale_numeric("fill", range=c("#9db6c7", "#3B6E8F")) %>%
+  add_tooltip(county_name, "hover") %>%
   hide_legend('fill') %>%
   hide_axis('x') %>% 
   hide_axis('y') %>%
-  set_options(width = 400, height = 600, keep_aspect = TRUE) #%>% # might need to adjust this
-  # add_tooltip(vis = get_state_dat , on = 'hover')
-
-
-
-
-get_state_dat <- function(x){
-  row <- wa_counties[wa_counties$group==x$group,]  %>%
-    select(subregion)  %>% 
-    distinct() %>%
-    mutate(subregion = Hmisc::capitalize(subregion))
-  # paste0("<b>", row[,"subregion"], "</b>")
-  paste0(names(x), ": ", format(x), collapse = "<br />")
-  }   
-
-all_values <- function(x) {
-  if(is.null(x)) return(NULL)
-  paste0(names(x), ": ", format(x), collapse = "<br />")
-}
-
-
-all_values <- function(x) {
-  if(is.null(x)) return(NULL)
-  paste0(names(x), ": ", format(x), collapse = "<br />")
-}
-
-all_values(mtcars)
-
-base <- mtcars %>% ggvis(x = ~wt, y = ~mpg) %>%
-  layer_points()
-base %>% add_tooltip(all_values, "hover")
-base %>% add_tooltip(all_values, "click")
-
-get_state_dat <- function(x) {
-  if(is.null(x)) {
-    return(NULL)
-  } 
-  # unique_data <- 
-  paste0('County: ', Hmisc::capitalize(unique(x$subregion)), collapse = "<br />")
-}
-
-get_state_dat(wa_counties)
-
-
-
-
-
-
-
-
-
-
-
+  set_options(width = 500, height = 600, keep_aspect = TRUE) 
